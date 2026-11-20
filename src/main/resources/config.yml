@@ -1,0 +1,14 @@
+target-player: Naptir
+channel: naptirx
+enabled-on-start: false
+max-queue-size: 100
+spawn-radius: 4
+max-mobs-per-wave: 20
+show-mob-name: true
+messages:
+  prefix: '&6[Waves] '
+  started: '&eWave started! &a{viewer} &7sent a gift: &f{mob} x{amount}'
+  finished: '&aWave finished!'
+  queued: '&eGift queued. Position: &f{position}'
+  disabled: '&cWave reception disabled.'
+  enabled: '&aWave reception enabled.'

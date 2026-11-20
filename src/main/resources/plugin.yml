@@ -1,0 +1,14 @@
+name: NaptirWaveQueue
+version: 1.0.0
+main: com.naptir.wavequeue.NaptirWaveQueue
+api-version: '1.21'
+author: Naptir
+description: Queues TikTok gift mob waves for a target player.
+commands:
+  waves:
+    description: Controls Naptir's TikTok mob wave queue.
+    usage: /waves <on|off|status|enqueue|test|clear>
+    permission: naptirwaves.admin
+permissions:
+  naptirwaves.admin:
+    default: op
