@@ -3,6 +3,7 @@ package com.naptir.wavequeue;
 
 import org.bukkit.Bukkit;
 import org.bukkit.ChatColor;
+import org.bukkit.Chunk;
 import org.bukkit.Location;
 import org.bukkit.Material;
 import org.bukkit.World;
@@ -19,28 +20,35 @@ import org.bukkit.entity.Zombie;
 import org.bukkit.event.EventHandler;
 import org.bukkit.event.Listener;
 import org.bukkit.event.entity.EntityDeathEvent;
+import org.bukkit.event.entity.PlayerDeathEvent;
 import org.bukkit.event.player.PlayerChangedWorldEvent;
 import org.bukkit.event.player.PlayerJoinEvent;
 import org.bukkit.event.player.PlayerQuitEvent;
+import org.bukkit.event.player.PlayerRespawnEvent;
 import org.bukkit.plugin.java.JavaPlugin;
 import org.bukkit.scheduler.BukkitTask;
 
 import java.util.ArrayDeque;
 import java.util.ArrayList;
 import java.util.Arrays;
+import java.util.HashSet;
 import java.util.Iterator;
 import java.util.List;
 import java.util.Locale;
 import java.util.Queue;
+import java.util.Set;
 import java.util.UUID;
 
 public final class NaptirWaveQueue extends JavaPlugin implements Listener {
 
     private final Queue<Wave> queue = new ArrayDeque<>();
     private final List<UUID> activeMobs = new ArrayList<>();
+    private final Set<Chunk> forcedChunks = new HashSet<>();
 
     private boolean enabled;
     private boolean waveRunning;
+    private boolean targetPaused;
+
     private BukkitTask monitorTask;
 
     private record Wave(String viewer, EntityType type, int amount) {}
@@ -70,24 +78,49 @@ public final class NaptirWaveQueue extends JavaPlugin implements Listener {
             monitorTask.cancel();
         }
 
+        releaseForcedChunks();
+
         queue.clear();
         activeMobs.clear();
+        waveRunning = false;
     }
 
+    // Player leaves: preserve the queue and current wave.
     @EventHandler
     public void onQuit(PlayerQuitEvent event) {
         if (event.getPlayer().getName().equalsIgnoreCase(targetName())) {
-            enabled = false;
-            queue.clear();
-
-            broadcast("&cNaptir left. Gift reception stopped.");
+            broadcast("&eNaptir left. Waves are waiting for his return.");
         }
     }
 
+    // Player returns: allow the queue to continue.
     @EventHandler
     public void onJoin(PlayerJoinEvent event) {
         if (event.getPlayer().getName().equalsIgnoreCase(targetName())) {
-            startNextWave();
+            targetPaused = false;
+
+            Bukkit.getScheduler().runTask(this, this::startNextWave);
+        }
+    }
+
+    // Death pauses the start of new waves, not the current wave.
+    @EventHandler
+    public void onPlayerDeath(PlayerDeathEvent event) {
+        if (event.getEntity().getName().equalsIgnoreCase(targetName())) {
+            targetPaused = true;
+
+            broadcast("&eNaptir died. The current wave will continue; the queue is waiting.");
+        }
+    }
+
+    // Resume after respawn.
+    @EventHandler
+    public void onPlayerRespawn(PlayerRespawnEvent event) {
+        if (event.getPlayer().getName().equalsIgnoreCase(targetName())) {
+            Bukkit.getScheduler().runTask(this, () -> {
+                targetPaused = false;
+                startNextWave();
+            });
         }
     }
 
@@ -95,8 +128,9 @@ public final class NaptirWaveQueue extends JavaPlugin implements Listener {
     public void onWorldChange(PlayerChangedWorldEvent event) {
         if (event.getPlayer().getName().equalsIgnoreCase(targetName())) {
             if (!isOverworld(event.getPlayer())) {
-                broadcast("&cGift reception paused outside the Overworld.");
+                broadcast("&cGift reception is waiting until Naptir returns to the Overworld.");
             } else {
+                targetPaused = false;
                 startNextWave();
             }
         }
@@ -121,15 +155,11 @@ public final class NaptirWaveQueue extends JavaPlugin implements Listener {
         switch (args[0].toLowerCase(Locale.ROOT)) {
 
             case "on" -> {
-                if (!targetOnline() || !isOverworld(targetPlayer())) {
-                    sender.sendMessage(color(
-                            "&cNaptir must be online in the Overworld."
-                    ));
-                    return true;
-                }
-
                 enabled = true;
+
                 sender.sendMessage(color("&aWave reception enabled."));
+
+                startNextWave();
                 return true;
             }
 
@@ -137,7 +167,7 @@ public final class NaptirWaveQueue extends JavaPlugin implements Listener {
                 enabled = false;
                 queue.clear();
 
-                sender.sendMessage(color("&cWave reception disabled."));
+                sender.sendMessage(color("&cWave reception disabled. Waiting queue cleared."));
                 return true;
             }
 
@@ -146,12 +176,15 @@ public final class NaptirWaveQueue extends JavaPlugin implements Listener {
                         "&6Waves: " + (enabled ? "&aON" : "&cOFF")
                         + " &7| Queue: &f" + queue.size()
                         + " &7| Active mobs: &f" + activeMobs.size()
+                        + " &7| Target: "
+                        + (canTargetReceive() ? "&aREADY" : "&eWAITING")
                 ));
                 return true;
             }
 
             case "clear" -> {
                 queue.clear();
+
                 sender.sendMessage(color("&aWaiting queue cleared."));
                 return true;
             }
@@ -167,15 +200,6 @@ public final class NaptirWaveQueue extends JavaPlugin implements Listener {
 
                 if (!enabled) {
                     sender.sendMessage(color("&cWave reception is OFF."));
-                    return true;
-                }
-
-                Player target = targetPlayer();
-
-                if (target == null || !isOverworld(target)) {
-                    sender.sendMessage(color(
-                            "&cNaptir must be online in the Overworld."
-                    ));
                     return true;
                 }
 
@@ -253,9 +277,13 @@ public final class NaptirWaveQueue extends JavaPlugin implements Listener {
             return;
         }
 
+        if (!canTargetReceive()) {
+            return;
+        }
+
         Player target = targetPlayer();
 
-        if (target == null || !isOverworld(target)) {
+        if (target == null) {
             return;
         }
 
@@ -277,7 +305,7 @@ public final class NaptirWaveQueue extends JavaPlugin implements Listener {
 
             if (entity instanceof LivingEntity living) {
 
-                // Prevent sunlight burning for summoned mobs only.
+                // Keep summoned mobs from burning in sunlight.
                 if (living instanceof Zombie zombie) {
                     zombie.setShouldBurnInDay(false);
                 }
@@ -293,6 +321,17 @@ public final class NaptirWaveQueue extends JavaPlugin implements Listener {
                 if (getConfig().getBoolean("show-mob-name", true)) {
                     living.setCustomName(color("&e" + wave.viewer()));
                     living.setCustomNameVisible(true);
+                }
+
+                // Prevent summoned mobs from naturally despawning.
+                living.setPersistent(true);
+
+                // Keep their chunks loaded while this wave is active.
+                Chunk chunk = entity.getLocation().getChunk();
+
+                if (!chunk.isForceLoaded()) {
+                    chunk.setForceLoaded(true);
+                    forcedChunks.add(chunk);
                 }
 
                 spawnedMobs.add(entity.getUniqueId());
@@ -340,9 +379,16 @@ public final class NaptirWaveQueue extends JavaPlugin implements Listener {
 
         while (iterator.hasNext()) {
 
-            Entity entity = Bukkit.getEntity(iterator.next());
+            UUID mobId = iterator.next();
 
-            if (entity == null || !entity.isValid() || entity.isDead()) {
+            Entity entity = Bukkit.getEntity(mobId);
+
+            // Do not count an unloaded entity as dead.
+            if (entity == null) {
+                continue;
+            }
+
+            if (!entity.isValid() || entity.isDead()) {
                 iterator.remove();
             }
         }
@@ -351,6 +397,8 @@ public final class NaptirWaveQueue extends JavaPlugin implements Listener {
 
             waveRunning = false;
 
+            releaseForcedChunks();
+
             broadcast(getConfig().getString(
                     "messages.finished",
                     "&aWave finished!"
@@ -358,6 +406,23 @@ public final class NaptirWaveQueue extends JavaPlugin implements Listener {
 
             startNextWave();
         }
+    }
+
+    private void releaseForcedChunks() {
+        for (Chunk chunk : forcedChunks) {
+            chunk.setForceLoaded(false);
+        }
+
+        forcedChunks.clear();
+    }
+
+    private boolean canTargetReceive() {
+        Player target = targetPlayer();
+
+        return target != null
+                && !target.isDead()
+                && !targetPaused
+                && isOverworld(target);
     }
 
     private Location findSpawnLocation(Player player, int index) {
@@ -413,10 +478,6 @@ public final class NaptirWaveQueue extends JavaPlugin implements Listener {
 
     private Player targetPlayer() {
         return Bukkit.getPlayerExact(targetName());
-    }
-
-    private boolean targetOnline() {
-        return targetPlayer() != null;
     }
 
     private String targetName() {
