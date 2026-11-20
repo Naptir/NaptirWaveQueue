@@ -9,10 +9,13 @@ import org.bukkit.World;
 import org.bukkit.block.Block;
 import org.bukkit.command.Command;
 import org.bukkit.command.CommandSender;
+import org.bukkit.entity.AbstractSkeleton;
 import org.bukkit.entity.Entity;
 import org.bukkit.entity.EntityType;
 import org.bukkit.entity.LivingEntity;
+import org.bukkit.entity.Phantom;
 import org.bukkit.entity.Player;
+import org.bukkit.entity.Zombie;
 import org.bukkit.event.EventHandler;
 import org.bukkit.event.Listener;
 import org.bukkit.event.entity.EntityDeathEvent;
@@ -32,6 +35,7 @@ import java.util.Queue;
 import java.util.UUID;
 
 public final class NaptirWaveQueue extends JavaPlugin implements Listener {
+
     private final Queue<Wave> queue = new ArrayDeque<>();
     private final List<UUID> activeMobs = new ArrayList<>();
 
@@ -44,9 +48,11 @@ public final class NaptirWaveQueue extends JavaPlugin implements Listener {
     @Override
     public void onEnable() {
         saveDefaultConfig();
+
         enabled = getConfig().getBoolean("enabled-on-start", false);
 
         Bukkit.getPluginManager().registerEvents(this, this);
+
         if (getCommand("waves") != null) {
             getCommand("waves").setExecutor(this);
         }
@@ -60,7 +66,10 @@ public final class NaptirWaveQueue extends JavaPlugin implements Listener {
 
     @Override
     public void onDisable() {
-        if (monitorTask != null) monitorTask.cancel();
+        if (monitorTask != null) {
+            monitorTask.cancel();
+        }
+
         queue.clear();
         activeMobs.clear();
     }
@@ -70,6 +79,7 @@ public final class NaptirWaveQueue extends JavaPlugin implements Listener {
         if (event.getPlayer().getName().equalsIgnoreCase(targetName())) {
             enabled = false;
             queue.clear();
+
             broadcast("&cNaptir left. Gift reception stopped.");
         }
     }
@@ -104,9 +114,12 @@ public final class NaptirWaveQueue extends JavaPlugin implements Listener {
             String label,
             String[] args
     ) {
-        if (args.length == 0) return help(sender);
+        if (args.length == 0) {
+            return help(sender);
+        }
 
         switch (args[0].toLowerCase(Locale.ROOT)) {
+
             case "on" -> {
                 if (!targetOnline() || !isOverworld(targetPlayer())) {
                     sender.sendMessage(color(
@@ -114,6 +127,7 @@ public final class NaptirWaveQueue extends JavaPlugin implements Listener {
                     ));
                     return true;
                 }
+
                 enabled = true;
                 sender.sendMessage(color("&aWave reception enabled."));
                 return true;
@@ -122,6 +136,7 @@ public final class NaptirWaveQueue extends JavaPlugin implements Listener {
             case "off" -> {
                 enabled = false;
                 queue.clear();
+
                 sender.sendMessage(color("&cWave reception disabled."));
                 return true;
             }
@@ -142,6 +157,7 @@ public final class NaptirWaveQueue extends JavaPlugin implements Listener {
             }
 
             case "enqueue", "test" -> {
+
                 if (args.length < 4) {
                     sender.sendMessage(color(
                             "&cUsage: /waves enqueue <viewer> <ENTITY> <amount>"
@@ -155,6 +171,7 @@ public final class NaptirWaveQueue extends JavaPlugin implements Listener {
                 }
 
                 Player target = targetPlayer();
+
                 if (target == null || !isOverworld(target)) {
                     sender.sendMessage(color(
                             "&cNaptir must be online in the Overworld."
@@ -164,27 +181,35 @@ public final class NaptirWaveQueue extends JavaPlugin implements Listener {
 
                 String entityName = args[args.length - 2];
                 String amountText = args[args.length - 1];
-                String viewer = String.join(" ",
-                        Arrays.copyOfRange(args, 1, args.length - 2));
+
+                String viewer = String.join(
+                        " ",
+                        Arrays.copyOfRange(args, 1, args.length - 2)
+                );
 
                 EntityType type;
+
                 try {
                     type = EntityType.valueOf(
                             entityName.toUpperCase(Locale.ROOT)
                     );
                 } catch (IllegalArgumentException ex) {
-                    sender.sendMessage(color("&cUnknown entity: " + entityName));
+                    sender.sendMessage(color(
+                            "&cUnknown entity: " + entityName
+                    ));
                     return true;
                 }
 
                 if (!type.isAlive()
                         || type == EntityType.PLAYER
                         || type == EntityType.ARMOR_STAND) {
+
                     sender.sendMessage(color("&cInvalid mob type."));
                     return true;
                 }
 
                 int amount;
+
                 try {
                     amount = Integer.parseInt(amountText);
                 } catch (NumberFormatException ex) {
@@ -193,6 +218,7 @@ public final class NaptirWaveQueue extends JavaPlugin implements Listener {
                 }
 
                 int max = getConfig().getInt("max-mobs-per-wave", 20);
+
                 if (amount < 1 || amount > max) {
                     sender.sendMessage(color(
                             "&cAmount must be between 1 and " + max
@@ -202,12 +228,15 @@ public final class NaptirWaveQueue extends JavaPlugin implements Listener {
 
                 if (queue.size() >= getConfig().getInt(
                         "max-queue-size", 100)) {
+
                     sender.sendMessage(color("&cWave queue is full."));
                     return true;
                 }
 
                 queue.add(new Wave(viewer, type, amount));
+
                 sender.sendMessage(color("&aGift added to wave queue."));
+
                 startNextWave();
                 return true;
             }
@@ -219,41 +248,72 @@ public final class NaptirWaveQueue extends JavaPlugin implements Listener {
     }
 
     private void startNextWave() {
-        if (waveRunning || queue.isEmpty() || !enabled) return;
+
+        if (waveRunning || queue.isEmpty() || !enabled) {
+            return;
+        }
 
         Player target = targetPlayer();
-        if (target == null || !isOverworld(target)) return;
+
+        if (target == null || !isOverworld(target)) {
+            return;
+        }
 
         Wave wave = queue.peek();
+
         List<UUID> spawnedMobs = new ArrayList<>();
 
         for (int i = 0; i < wave.amount(); i++) {
+
             Location location = findSpawnLocation(target, i);
-            if (location == null) continue;
+
+            if (location == null) {
+                continue;
+            }
 
             Entity entity = target.getWorld().spawnEntity(
                     location, wave.type()
             );
 
             if (entity instanceof LivingEntity living) {
+
+                // Prevent sunlight burning for summoned mobs only.
+                if (living instanceof Zombie zombie) {
+                    zombie.setShouldBurnInDay(false);
+                }
+
+                if (living instanceof AbstractSkeleton skeleton) {
+                    skeleton.setShouldBurnInDay(false);
+                }
+
+                if (living instanceof Phantom phantom) {
+                    phantom.setShouldBurnInDay(false);
+                }
+
                 if (getConfig().getBoolean("show-mob-name", true)) {
                     living.setCustomName(color("&e" + wave.viewer()));
                     living.setCustomNameVisible(true);
                 }
+
                 spawnedMobs.add(entity.getUniqueId());
+
             } else {
                 entity.remove();
             }
         }
 
         if (spawnedMobs.isEmpty()) {
-            broadcast("&cCould not find safe spawn locations. Wave remains queued.");
+            broadcast(
+                    "&cCould not find safe spawn locations. Wave remains queued."
+            );
             return;
         }
 
         queue.poll();
+
         activeMobs.clear();
         activeMobs.addAll(spawnedMobs);
+
         waveRunning = true;
 
         String message = getConfig().getString(
@@ -261,14 +321,16 @@ public final class NaptirWaveQueue extends JavaPlugin implements Listener {
                 "&eWave started! {viewer} sent {mob} x{amount}"
         );
 
-        broadcast(message
-                .replace("{viewer}", wave.viewer())
-                .replace("{mob}", wave.type().name())
-                .replace("{amount}", String.valueOf(spawnedMobs.size()))
+        broadcast(
+                message
+                        .replace("{viewer}", wave.viewer())
+                        .replace("{mob}", wave.type().name())
+                        .replace("{amount}", String.valueOf(spawnedMobs.size()))
         );
     }
 
     private void monitorWave() {
+
         if (!waveRunning) {
             startNextWave();
             return;
@@ -277,34 +339,50 @@ public final class NaptirWaveQueue extends JavaPlugin implements Listener {
         Iterator<UUID> iterator = activeMobs.iterator();
 
         while (iterator.hasNext()) {
+
             Entity entity = Bukkit.getEntity(iterator.next());
+
             if (entity == null || !entity.isValid() || entity.isDead()) {
                 iterator.remove();
             }
         }
 
         if (activeMobs.isEmpty()) {
+
             waveRunning = false;
+
             broadcast(getConfig().getString(
-                    "messages.finished", "&aWave finished!"
+                    "messages.finished",
+                    "&aWave finished!"
             ));
+
             startNextWave();
         }
     }
 
     private Location findSpawnLocation(Player player, int index) {
+
         Location base = player.getLocation();
         World world = player.getWorld();
-        int radius = Math.max(2, getConfig().getInt("spawn-radius", 4));
+
+        int radius = Math.max(
+                2,
+                getConfig().getInt("spawn-radius", 4)
+        );
 
         for (int attempt = 0; attempt < 20; attempt++) {
-            double angle = index * 2.399963229728653 + attempt * 0.7;
+
+            double angle =
+                    index * 2.399963229728653 + attempt * 0.7;
+
             int distance = radius + attempt % 3;
+
             int x = (int) Math.round(Math.cos(angle) * distance);
             int z = (int) Math.round(Math.sin(angle) * distance);
 
             int bx = base.getBlockX() + x;
             int bz = base.getBlockZ() + z;
+
             int y = world.getHighestBlockYAt(bx, bz) + 1;
 
             Block feet = world.getBlockAt(bx, y, bz);
@@ -314,7 +392,13 @@ public final class NaptirWaveQueue extends JavaPlugin implements Listener {
                     && head.isPassable()
                     && feet.getType() != Material.WATER
                     && feet.getType() != Material.LAVA) {
-                return new Location(world, bx + 0.5, y, bz + 0.5);
+
+                return new Location(
+                        world,
+                        bx + 0.5,
+                        y,
+                        bz + 0.5
+                );
             }
         }
 
@@ -340,10 +424,13 @@ public final class NaptirWaveQueue extends JavaPlugin implements Listener {
     }
 
     private void broadcast(String message) {
-        Bukkit.broadcastMessage(color(
-                getConfig().getString("messages.prefix", "&6[Waves] ")
-                + message
-        ));
+        Bukkit.broadcastMessage(
+                color(
+                        getConfig().getString(
+                                "messages.prefix", "&6[Waves] "
+                        ) + message
+                )
+        );
     }
 
     private String color(String text) {
@@ -351,13 +438,17 @@ public final class NaptirWaveQueue extends JavaPlugin implements Listener {
     }
 
     private boolean help(CommandSender sender) {
+
         sender.sendMessage(color("&6/waves on|off|status|clear"));
+
         sender.sendMessage(color(
                 "&6/waves enqueue <viewer> <ENTITY> <amount>"
         ));
+
         sender.sendMessage(color(
                 "&6/waves test <viewer> <ENTITY> <amount>"
         ));
+
         return true;
     }
 }
