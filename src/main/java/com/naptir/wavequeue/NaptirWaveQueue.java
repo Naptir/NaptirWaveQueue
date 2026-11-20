@@ -1,4 +1,5 @@
 
+
 package com.naptir.wavequeue;
 
 import org.bukkit.Bukkit;
@@ -20,6 +21,7 @@ import org.bukkit.entity.Zombie;
 import org.bukkit.event.EventHandler;
 import org.bukkit.event.Listener;
 import org.bukkit.event.entity.EntityDeathEvent;
+import org.bukkit.event.entity.EntityExplodeEvent;
 import org.bukkit.event.entity.PlayerDeathEvent;
 import org.bukkit.event.player.PlayerChangedWorldEvent;
 import org.bukkit.event.player.PlayerJoinEvent;
@@ -85,7 +87,6 @@ public final class NaptirWaveQueue extends JavaPlugin implements Listener {
         waveRunning = false;
     }
 
-    // Player leaves: preserve the queue and current wave.
     @EventHandler
     public void onQuit(PlayerQuitEvent event) {
         if (event.getPlayer().getName().equalsIgnoreCase(targetName())) {
@@ -93,27 +94,22 @@ public final class NaptirWaveQueue extends JavaPlugin implements Listener {
         }
     }
 
-    // Player returns: allow the queue to continue.
     @EventHandler
     public void onJoin(PlayerJoinEvent event) {
         if (event.getPlayer().getName().equalsIgnoreCase(targetName())) {
             targetPaused = false;
-
             Bukkit.getScheduler().runTask(this, this::startNextWave);
         }
     }
 
-    // Death pauses the start of new waves, not the current wave.
     @EventHandler
     public void onPlayerDeath(PlayerDeathEvent event) {
         if (event.getEntity().getName().equalsIgnoreCase(targetName())) {
             targetPaused = true;
-
             broadcast("&eNaptir died. The current wave will continue; the queue is waiting.");
         }
     }
 
-    // Resume after respawn.
     @EventHandler
     public void onPlayerRespawn(PlayerRespawnEvent event) {
         if (event.getPlayer().getName().equalsIgnoreCase(targetName())) {
@@ -141,6 +137,12 @@ public final class NaptirWaveQueue extends JavaPlugin implements Listener {
         activeMobs.remove(event.getEntity().getUniqueId());
     }
 
+    // Remove an exploding mob from the active wave.
+    @EventHandler
+    public void onMobExplode(EntityExplodeEvent event) {
+        activeMobs.remove(event.getEntity().getUniqueId());
+    }
+
     @Override
     public boolean onCommand(
             CommandSender sender,
@@ -156,9 +158,7 @@ public final class NaptirWaveQueue extends JavaPlugin implements Listener {
 
             case "on" -> {
                 enabled = true;
-
                 sender.sendMessage(color("&aWave reception enabled."));
-
                 startNextWave();
                 return true;
             }
@@ -166,7 +166,6 @@ public final class NaptirWaveQueue extends JavaPlugin implements Listener {
             case "off" -> {
                 enabled = false;
                 queue.clear();
-
                 sender.sendMessage(color("&cWave reception disabled. Waiting queue cleared."));
                 return true;
             }
@@ -184,7 +183,6 @@ public final class NaptirWaveQueue extends JavaPlugin implements Listener {
 
             case "clear" -> {
                 queue.clear();
-
                 sender.sendMessage(color("&aWaiting queue cleared."));
                 return true;
             }
@@ -227,7 +225,6 @@ public final class NaptirWaveQueue extends JavaPlugin implements Listener {
                 if (!type.isAlive()
                         || type == EntityType.PLAYER
                         || type == EntityType.ARMOR_STAND) {
-
                     sender.sendMessage(color("&cInvalid mob type."));
                     return true;
                 }
@@ -252,7 +249,6 @@ public final class NaptirWaveQueue extends JavaPlugin implements Listener {
 
                 if (queue.size() >= getConfig().getInt(
                         "max-queue-size", 100)) {
-
                     sender.sendMessage(color("&cWave queue is full."));
                     return true;
                 }
@@ -305,7 +301,6 @@ public final class NaptirWaveQueue extends JavaPlugin implements Listener {
 
             if (entity instanceof LivingEntity living) {
 
-                // Keep summoned mobs from burning in sunlight.
                 if (living instanceof Zombie zombie) {
                     zombie.setShouldBurnInDay(false);
                 }
@@ -323,10 +318,8 @@ public final class NaptirWaveQueue extends JavaPlugin implements Listener {
                     living.setCustomNameVisible(true);
                 }
 
-                // Prevent summoned mobs from naturally despawning.
                 living.setPersistent(true);
 
-                // Keep their chunks loaded while this wave is active.
                 Chunk chunk = entity.getLocation().getChunk();
 
                 if (!chunk.isForceLoaded()) {
@@ -383,8 +376,10 @@ public final class NaptirWaveQueue extends JavaPlugin implements Listener {
 
             Entity entity = Bukkit.getEntity(mobId);
 
-            // Do not count an unloaded entity as dead.
+            // These mobs are force-loaded during the wave.
+            // If Bukkit cannot find one, consider it removed.
             if (entity == null) {
+                iterator.remove();
                 continue;
             }
 
